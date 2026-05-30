@@ -1,4 +1,4 @@
-# ProKino Bot — Aiogram 3 | Python 3.10+
+# Kinotarif Bot — Aiogram 3 | Python 3.10+
 # Funksiyalar: kino bazasi, kod orqali qidirish, VIP (Telegram Stars),
 # majburiy obuna, admin panel, statistika, forward xabar indeksi
 
@@ -393,7 +393,7 @@ async def cmd_start(message: Message, command: CommandObject, bot: Bot):
             return
 
     text = (
-        "🎬 <b>ProKino Bot</b> ga xush kelibsiz!\n\n"
+        "🎬 <b>Kinotarif Bot</b> ga xush kelibsiz!\n\n"
         "<b>Asosiy buyruqlar:</b>\n"
         "• <code>/kino &lt;kod&gt;</code> — Kino olish\n"
         "• <code>/top</code> — Eng ko'p yuklangan kinolar\n"
@@ -577,7 +577,7 @@ async def _send_vip_invoice(user_id: int, bot: Bot, chat_id: int):
     await bot.send_invoice(
         chat_id=chat_id,
         title=f"👑 VIP obuna — {VIP_DAYS} kun",
-        description=f"ProKino botida barcha VIP kinolarga {VIP_DAYS} kunlik kirish.",
+        description=f"Kinotarif botida barcha VIP kinolarga {VIP_DAYS} kunlik kirish.",
         payload=f"vip_{user_id}",
         currency="XTR",  # Telegram Stars
         prices=[LabeledPrice(label="VIP obuna", amount=VIP_STARS_PRICE)],
@@ -935,7 +935,7 @@ async def main():
     bot = Bot(BOT_TOKEN, parse_mode=ParseMode.HTML)
     dp.startup.register(on_startup)
 
-    logger.info("ProKino Bot ishga tushdi.")
+    logger.info("Kinotarif Bot ishga tushdi.")
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
