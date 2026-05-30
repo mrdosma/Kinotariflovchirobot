@@ -7,7 +7,7 @@ import logging
 import sqlite3
 from typing import Optional, Dict, Any, List
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandObject
 from aiogram.types import (
@@ -128,6 +128,19 @@ def init_db():
         "CREATE TABLE IF NOT EXISTS favorites "
         "(user_id INTEGER, movie_key TEXT, PRIMARY KEY (user_id, movie_key))"
     )
+    # Kanal xabarlari indeksi
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS channel_posts "
+        "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "channel_id INTEGER, channel_username TEXT, "
+        "message_id INTEGER, text TEXT, "
+        "UNIQUE(channel_id, message_id))"
+    )
+    # Foydalanuvchi tanlagan kanal
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS user_channels "
+        "(user_id INTEGER PRIMARY KEY, channel_id INTEGER, channel_username TEXT)"
+    )
     con.commit()
     con.close()
 
@@ -156,6 +169,55 @@ def db_get_favorites(user_id: int) -> List[str]:
     ).fetchall()
     con.close()
     return [r[0] for r in rows]
+
+# ------------------- SQLite: Kanal funksiyalari -------------------
+
+def db_set_user_channel(user_id: int, channel_id: int, channel_username: str):
+    con = sqlite3.connect(DB_PATH)
+    con.execute(
+        "INSERT OR REPLACE INTO user_channels (user_id, channel_id, channel_username) VALUES (?, ?, ?)",
+        (user_id, channel_id, channel_username),
+    )
+    con.commit()
+    con.close()
+
+def db_get_user_channel(user_id: int) -> Optional[Dict[str, Any]]:
+    con = sqlite3.connect(DB_PATH)
+    row = con.execute(
+        "SELECT channel_id, channel_username FROM user_channels WHERE user_id=?", (user_id,)
+    ).fetchone()
+    con.close()
+    if row:
+        return {"channel_id": row[0], "channel_username": row[1]}
+    return None
+
+def db_save_post(channel_id: int, channel_username: str, message_id: int, text: str):
+    con = sqlite3.connect(DB_PATH)
+    con.execute(
+        "INSERT OR IGNORE INTO channel_posts (channel_id, channel_username, message_id, text) "
+        "VALUES (?, ?, ?, ?)",
+        (channel_id, channel_username, message_id, text[:2000]),
+    )
+    con.commit()
+    con.close()
+
+def db_search_posts(channel_id: int, query: str) -> List[Dict[str, Any]]:
+    con = sqlite3.connect(DB_PATH)
+    rows = con.execute(
+        "SELECT message_id, text, channel_username FROM channel_posts "
+        "WHERE channel_id=? AND text LIKE ? LIMIT 5",
+        (channel_id, f"%{query}%"),
+    ).fetchall()
+    con.close()
+    return [{"message_id": r[0], "text": r[1], "channel_username": r[2]} for r in rows]
+
+def db_post_count(channel_id: int) -> int:
+    con = sqlite3.connect(DB_PATH)
+    count = con.execute(
+        "SELECT COUNT(*) FROM channel_posts WHERE channel_id=?", (channel_id,)
+    ).fetchone()[0]
+    con.close()
+    return count
 
 # ------------------- OMDb yordamchi -------------------
 
@@ -240,6 +302,8 @@ async def cmd_start(message: Message, command: CommandObject):
         "• <code>/sevimli_qoshish &lt;nomi&gt;</code> — Sevimliga qo'shish\n"
         "• <code>/sevimlilar</code> — Sevimlilar ro'yxati\n"
         "• <code>/sevimli_ochirish &lt;nomi&gt;</code> — Sevimlilardan o'chirish\n"
+        "• <code>/kanal @username</code> — Kanal ulash\n"
+        "• <code>/qidir &lt;nomi&gt;</code> — Kanaldan qidirish\n"
         "• <code>/help</code> — Yordam"
     )
     if payload:
@@ -260,6 +324,10 @@ async def cmd_help(message: Message):
         "• <code>/sevimli_qoshish &lt;nomi&gt;</code> — Sevimliga qo'shish\n"
         "• <code>/sevimlilar</code> — Saqlangan filmlaringiz\n"
         "• <code>/sevimli_ochirish &lt;nomi&gt;</code> — Sevimlilardan o'chirish\n\n"
+        "<b>Kanal qidirish:</b>\n"
+        "• <code>/kanal @username</code> — Kanal ulash (bot kanalda admin bo'lishi kerak)\n"
+        "• <code>/kanal</code> — Joriy kanal holati\n"
+        "• <code>/qidir &lt;film nomi&gt;</code> — Kanaldan xabar qidirish\n\n"
         "Inline: <code>@bot_username Matrix</code>"
     )
     await message.answer(text, parse_mode=ParseMode.HTML)
@@ -366,6 +434,100 @@ async def cmd_favorites(message: Message):
             lines.append(f"• {k.title()}")
     await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
 
+# ------------------- Kanal buyruqlari -------------------
+
+@dp.message(Command("kanal"))
+async def cmd_kanal(message: Message, command: CommandObject, bot: Bot):
+    if not command.args:
+        ch = db_get_user_channel(message.from_user.id)
+        if ch:
+            uname = ch["channel_username"]
+            count = db_post_count(ch["channel_id"])
+            await message.answer(
+                f"Hozirgi kanal: <b>@{uname}</b>\n"
+                f"Indekslangan xabarlar: <b>{count}</b>\n\n"
+                f"O'zgartirish uchun: <code>/kanal @kanal_nomi</code>",
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await message.answer(
+                "Hech qanday kanal sozlanmagan.\n"
+                "Foydalanish: <code>/kanal @kanal_nomi</code>\n\n"
+                "<b>Eslatma:</b> Botni kanalga admin qilib qo'shing, "
+                "shunda yangi xabarlar avtomatik indekslanadi.",
+                parse_mode=ParseMode.HTML,
+            )
+        return
+
+    raw = command.args.strip()
+    username = raw.lstrip("@")
+
+    await message.answer("Kanal tekshirilmoqda... ⏳")
+    try:
+        chat = await bot.get_chat(f"@{username}")
+    except Exception:
+        await message.answer(
+            f"❌ <b>@{username}</b> kanaliga ulanib bo'lmadi.\n"
+            "Botni kanalga admin qilib qo'shing va qayta urinib ko'ring.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    db_set_user_channel(message.from_user.id, chat.id, username)
+    await message.answer(
+        f"✅ Kanal sozlandi: <b>@{username}</b>\n\n"
+        f"Endi kanalga yangi post tushganda avtomatik saqlanadi.\n"
+        f"Qidirish uchun: <code>/qidir &lt;film nomi&gt;</code>",
+        parse_mode=ParseMode.HTML,
+    )
+
+@dp.message(Command("qidir"))
+async def cmd_qidir(message: Message, command: CommandObject):
+    if not command.args:
+        await message.reply(
+            "Film nomini kiriting. Masalan: <code>/qidir Inception</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    ch = db_get_user_channel(message.from_user.id)
+    if not ch:
+        await message.answer(
+            "Avval kanal sozlang: <code>/kanal @kanal_nomi</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    query = command.args.strip()
+    results = db_search_posts(ch["channel_id"], query)
+
+    if not results:
+        count = db_post_count(ch["channel_id"])
+        await message.answer(
+            f"❌ <b>@{ch['channel_username']}</b> kanalida «{query}» topilmadi.\n"
+            f"Indekslangan xabarlar: {count} ta\n\n"
+            f"<i>Eslatma: faqat bot admin bo'lgandan keyin tushgan xabarlar indekslanadi.</i>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    lines = [f"🔍 <b>«{query}»</b> bo'yicha @{ch['channel_username']} kanalidan natijalar:\n"]
+    for r in results:
+        preview = r["text"][:80].replace("\n", " ")
+        link = f"https://t.me/{r['channel_username']}/{r['message_id']}"
+        lines.append(f"• <a href='{link}'>{preview}…</a>")
+
+    await message.answer("\n".join(lines), parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+
+# Kanaldan kelgan yangi xabarlarni indekslash
+@dp.channel_post(F.text)
+async def on_channel_post(message: Message):
+    if not message.chat or not message.text:
+        return
+    username = message.chat.username or str(message.chat.id)
+    db_save_post(message.chat.id, username, message.message_id, message.text)
+    logger.info("Kanal xabari saqlandi: @%s / msg_id=%s", username, message.message_id)
+
 # ------------------- Inline rejim -------------------
 
 @dp.inline_query()
@@ -410,6 +572,8 @@ async def on_startup(bot: Bot):
         BotCommand(command="sevimli_qoshish", description="Sevimliga qo'shish"),
         BotCommand(command="sevimlilar", description="Sevimlilar ro'yxati"),
         BotCommand(command="sevimli_ochirish", description="Sevimlilardan o'chirish"),
+        BotCommand(command="kanal", description="Kanal ulash / holati"),
+        BotCommand(command="qidir", description="Kanaldan film qidirish"),
         BotCommand(command="about", description="Bot haqida"),
     ]
     await bot.set_my_commands(commands)
