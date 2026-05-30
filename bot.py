@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandObject
 from aiogram.types import (
@@ -932,7 +933,7 @@ async def main():
         logger.warning("ADMIN_IDS o'rnatilmagan — admin buyruqlari ishlamaydi.")
 
     init_db()
-    bot = Bot(BOT_TOKEN, parse_mode=ParseMode.HTML)
+    bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp.startup.register(on_startup)
 
     logger.info("Kinotarif Bot ishga tushdi.")
